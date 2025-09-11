@@ -101,9 +101,9 @@ For detailed route planning with real transit data:
    - Download Alexandria GTFS data
    - Place it in the `otp_data` directory
 
-3. **Start OTP server:**
+3. **Start OTP server:** open cmd and cd to the otp folder
    ```bash
-   java -Xmx4G -jar otp-2.2.0-shaded.jar --build "otp_data" --serve
+   java -Xmx4G -jar otp-2.2.0-shaded.jar --build "path_to_your_otp_data(gtfs+osm)\otp_data" --serve
    ```
 
 4. **Verify OTP is running:**
