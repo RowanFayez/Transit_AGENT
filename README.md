@@ -2,7 +2,7 @@
 
 A smart AI-powered transit assistant for Alexandria, Egypt that helps users find public transportation routes using natural language queries in Arabic, Egyptian Arabic, and English.
 
-## 🌟 Features
+##  Features
 
 - **Trilingual Support**: Arabic, Egyptian Arabic, and English
 - **Real-time Route Planning**: Integration with OpenTripPlanner (OTP)
@@ -11,7 +11,7 @@ A smart AI-powered transit assistant for Alexandria, Egypt that helps users find
 - **Web Interface**: User-friendly Flask-based web application
 - **Memory System**: Remembers user preferences and recent locations
 
-## 🚀 Quick Start
+##  Quick Start
 
 ### Prerequisites
 
