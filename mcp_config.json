@@ -1,0 +1,90 @@
+{
+  "mcpServers": {
+    "otp-transit": {
+      "command": "python",
+      "args": ["mcp_server.py"],
+      "env": {
+        "OTP_BASE_URL": "http://localhost:8080"
+      }
+    }
+  },
+  "tools": {
+    "plan_transit_route": {
+      "description": "Plan a transit route between two locations using OpenTripPlanner",
+      "parameters": {
+        "from_lat": {
+          "type": "number",
+          "description": "Starting latitude"
+        },
+        "from_lon": {
+          "type": "number", 
+          "description": "Starting longitude"
+        },
+        "to_lat": {
+          "type": "number",
+          "description": "Destination latitude"
+        },
+        "to_lon": {
+          "type": "number",
+          "description": "Destination longitude"
+        },
+        "mode": {
+          "type": "string",
+          "description": "Transit mode (TRANSIT, BUS, WALK, BICYCLE, CAR)",
+          "default": "TRANSIT"
+        },
+        "depart_time": {
+          "type": "string",
+          "description": "Departure time (ISO format)",
+          "optional": true
+        }
+      }
+    },
+    "check_otp_connection": {
+      "description": "Check if OpenTripPlanner server is running and accessible",
+      "parameters": {}
+    },
+    "geocode_location": {
+      "description": "Convert location name to coordinates using Alexandria transit stops",
+      "parameters": {
+        "location_name": {
+          "type": "string",
+          "description": "Name of the location to geocode"
+        }
+      }
+    },
+    "search_locations": {
+      "description": "Search for locations matching a query string",
+      "parameters": {
+        "query": {
+          "type": "string",
+          "description": "Search query"
+        },
+        "limit": {
+          "type": "number",
+          "description": "Maximum number of results",
+          "default": 5
+        }
+      }
+    }
+  },
+  "capabilities": {
+    "transit_planning": true,
+    "geocoding": true,
+    "memory_management": true,
+    "bilingual_support": true,
+    "route_optimization": true
+  },
+  "supported_languages": ["ar", "en"],
+  "transit_modes": ["TRANSIT", "BUS", "WALK", "BICYCLE", "CAR"],
+  "coverage_area": {
+    "city": "Alexandria",
+    "country": "Egypt",
+    "bounds": {
+      "north": 31.337691,
+      "south": 30.883987,
+      "east": 30.209999,
+      "west": 29.497864
+    }
+  }
+}

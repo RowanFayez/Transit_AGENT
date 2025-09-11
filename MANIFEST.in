@@ -1,0 +1,17 @@
+include README.md
+include LICENSE
+include CONTRIBUTING.md
+include CHANGELOG.md
+include requirements.txt
+include env_example.txt
+include MANIFEST.in
+recursive-include templates *.html
+recursive-include *.py
+global-exclude *.pyc
+global-exclude __pycache__
+global-exclude .git*
+global-exclude .env
+global-exclude venv/
+global-exclude *.log
+global-exclude user_memory.json
+global-exclude otp_data/
