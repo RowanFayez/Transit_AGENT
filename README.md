@@ -65,7 +65,6 @@ A smart AI-powered transit assistant for Alexandria, Egypt that helps users find
 
 ### Running the Application
 
-#### Option 1: Web Interface (Recommended)
 
 1. **Start the web application:**
    ```bash
@@ -77,19 +76,8 @@ A smart AI-powered transit assistant for Alexandria, Egypt that helps users find
    http://localhost:5000
    ```
 
-#### Option 2: Command Line Interface
 
-1. **Run the agent directly:**
-   ```bash
-   python agent.py
-   ```
-
-2. **Or test the final version:**
-   ```bash
-   python test_final.py
-   ```
-
-## 🗺️ OpenTripPlanner Setup (Optional)
+## 🗺️ OpenTripPlanner Setup (1st)
 
 For detailed route planning with real transit data:
 
