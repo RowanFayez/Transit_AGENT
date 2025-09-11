@@ -44,15 +44,24 @@ A smart AI-powered transit assistant for Alexandria, Egypt that helps users find
    ```
 
 4. **Set up environment variables:**
-   ```bash
-   # Copy the example file
-   cp env_example.txt .env
    
-   # Edit .env and add your Gemini API key
-   GEMINI_API_KEY=your_gemini_api_key_here
-   OTP_BASE_URL=http://localhost:8080
-   MEMORY_FILE=user_memory.json
-   ```
+    Copy the example env file, then edit `.env` to add your keys:
+   
+    - Windows (PowerShell):
+       ```powershell
+       Copy-Item env_example.txt .env
+       ```
+    - macOS/Linux:
+       ```bash
+       cp env_example.txt .env
+       ```
+   
+    Required variables in `.env`:
+    ```
+    GEMINI_API_KEY=your_gemini_api_key_here
+    OTP_BASE_URL=http://localhost:8080
+    MEMORY_FILE=user_memory.json
+    ```
 
 ### Running the Application
 
