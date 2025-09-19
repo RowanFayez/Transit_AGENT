@@ -13,6 +13,7 @@ from dataclasses import dataclass
 import google.generativeai as genai
 from dotenv import load_dotenv
 from geocoding_full import AlexandriaGeocoder
+from otp_client import AsyncOTPClient, OTPItinerary, OTPLeg
 
 # Load environment variables
 load_dotenv()
@@ -34,7 +35,12 @@ class FinalTransitAgent:
     def __init__(self):
         self.geocoder = AlexandriaGeocoder()
         self.model = genai.GenerativeModel('gemini-pro')
-        self.otp_url = "http://localhost:8080"
+        self.otp_client = AsyncOTPClient(os.getenv('OTP_BASE_URL') or "http://localhost:8080")
+
+    @property
+    def otp_url(self) -> str:
+        """Compatibility property for existing web UI to read current OTP base URL."""
+        return self.otp_client.base_url
     
     def detect_language(self, text: str) -> str:
         """Detect if text is Arabic/Egyptian or English"""
@@ -150,6 +156,26 @@ class FinalTransitAgent:
             return location_mentions[0][0], location_mentions[1][0]
         
         return None, None
+
+    async def extract_locations_smart(self, query: str) -> Tuple[Optional[str], Optional[str]]:
+        """Use Gemini to extract from/to locations as a fallback when regex fails."""
+        try:
+            prompt = (
+                "Extract start and destination locations from the user query. "
+                "Return JSON only with keys: from, to. If unknown, set to null.\n\n"
+                f"Query: {query}"
+            )
+            resp = self.model.generate_content(prompt)
+            text = resp.text.strip()
+            # Try to parse JSON block
+            start = text.find('{')
+            end = text.rfind('}')
+            if start != -1 and end != -1 and end > start:
+                data = json.loads(text[start:end+1])
+                return data.get('from'), data.get('to')
+        except Exception:
+            pass
+        return None, None
     
     async def geocode_location(self, location_name: str) -> Optional[Tuple[float, float, str]]:
         """Geocode a location name to coordinates"""
@@ -167,135 +193,117 @@ class FinalTransitAgent:
     
     async def check_otp_status(self) -> bool:
         """Check if OTP server is running"""
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(f"{self.otp_url}/otp/routers/default", timeout=5) as response:
-                    return response.status == 200
-        except:
-            return False
+        return await self.otp_client.check_status()
     
-    async def plan_route_with_otp(self, from_coords: Tuple[float, float], to_coords: Tuple[float, float]) -> Optional[Route]:
-        """Plan route using OpenTripPlanner with proper time calculation"""
+    async def plan_route_with_otp(self, from_coords: Tuple[float, float], to_coords: Tuple[float, float]) -> Optional[List[Route]]:
+        """Plan route using OpenTripPlanner returning multiple itineraries, with proper duration math (seconds→minutes)."""
         try:
-            # Check OTP status first
             if not await self.check_otp_status():
                 print("OTP server is not running")
                 return None
-            
-            url = f"{self.otp_url}/otp/routers/default/plan"
-            params = {
-                'fromPlace': f"{from_coords[0]},{from_coords[1]}",
-                'toPlace': f"{to_coords[0]},{to_coords[1]}",
-                'mode': 'TRANSIT,WALK',
-                'maxWalkDistance': 2000,
-                'arriveBy': 'false',
-                'numItineraries': 3
-            }
-            
+
             print(f"Requesting OTP route from {from_coords} to {to_coords}")
-            
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, params=params, timeout=15) as response:
-                    print(f"OTP Response Status: {response.status}")
-                    
-                    if response.status == 200:
-                        data = await response.json()
-                        
-                        if 'plan' in data and 'itineraries' in data['plan'] and len(data['plan']['itineraries']) > 0:
-                            itinerary = data['plan']['itineraries'][0]  # Take first route
-                            
-                            steps = []
-                            transit_modes = []
-                            total_walking_time = 0
-                            
-                            for leg in itinerary['legs']:
-                                mode = leg['mode']
-                                duration_minutes = leg['duration'] // 1000 // 60  # Convert to minutes
-                                
-                                if mode == 'WALK':
-                                    total_walking_time += duration_minutes
-                                
-                                step = {
-                                    'mode': mode,
-                                    'from': leg['from']['name'],
-                                    'to': leg['to']['name'],
-                                    'duration': duration_minutes,
-                                    'distance': leg['distance'] / 1000  # Convert to km
-                                }
-                                steps.append(step)
-                                
-                                if mode != 'WALK':
-                                    transit_modes.append(mode)
-                            
-                            # Calculate total duration properly
-                            total_duration = itinerary['duration'] // 1000 // 60
-                            
-                            return Route(
-                                duration=total_duration,
-                                distance=sum(leg['distance'] for leg in itinerary['legs']) / 1000,
-                                steps=steps,
-                                total_walking_time=total_walking_time,
-                                transit_modes=list(set(transit_modes))
-                            )
-                        else:
-                            print("No itineraries found in OTP response")
-                            return None
-                    else:
-                        print(f"OTP request failed with status {response.status}")
-                        return None
+            result = await self.otp_client.plan_trip(
+                from_coords[0], from_coords[1], to_coords[0], to_coords[1], num_itineraries=3
+            )
+
+            if not result.get("success"):
+                print(f"OTP error: {result.get('error')}")
+                return None
+
+            itineraries: List[OTPItinerary] = result["itineraries"]
+            routes: List[Route] = []
+            for itin in itineraries:
+                steps: List[Dict[str, Any]] = []
+                transit_modes: List[str] = []
+
+                for leg in itin.legs:
+                    # Duration already in minutes in our client
+                    step = {
+                        'mode': leg.mode,
+                        'from': leg.from_name,
+                        'to': leg.to_name,
+                        'duration': leg.duration_min,
+                        'distance': leg.distance_km,
+                        'route': leg.route_short_name or leg.route or leg.route_long_name,
+                        'headsign': leg.headsign
+                    }
+                    steps.append(step)
+                    if leg.mode != 'WALK':
+                        transit_modes.append(leg.mode)
+
+                routes.append(
+                    Route(
+                        duration=itin.total_duration_min,
+                        distance=itin.total_distance_km,
+                        steps=steps,
+                        total_walking_time=itin.total_walking_time_min,
+                        transit_modes=list(dict.fromkeys(transit_modes))
+                    )
+                )
+
+            return routes
         except Exception as e:
             print(f"OTP Error: {e}")
             return None
     
-    def format_route_response(self, route: Route, from_name: str, to_name: str, language: str) -> str:
-        """Format route response in the appropriate language with proper names"""
+    def _format_single_route(self, route: Route, language: str) -> str:
+        """Format a single itinerary into human readable text."""
         if language == "ar":
-            response = f"""
-🚌 **خطة الرحلة من {from_name} إلى {to_name}**
-
-⏱️ **الوقت الكلي:** {route.duration} دقيقة
-📏 **المسافة الكلية:** {route.distance:.1f} كم
-🚶 **وقت المشي:** {route.total_walking_time} دقيقة
-
-**تفاصيل الرحلة:**
-"""
+            response = f"⏱️ الوقت الكلي: {route.duration} دقيقة\n📏 المسافة: {route.distance:.1f} كم\n🚶 وقت المشي: {route.total_walking_time} دقيقة\n"
             
             for i, step in enumerate(route.steps, 1):
                 if step['mode'] == 'WALK':
-                    response += f"{i}. 🚶 امشي من **{step['from']}** إلى **{step['to']}** ({step['duration']} دق - {step['distance']:.1f} كم)\n"
+                    response += f"{i}. 🚶 امشي من {step['from']} إلى {step['to']} ({step['duration']} د - {step['distance']:.1f} كم)\n"
                 else:
                     mode_name = {
                         'BUS': 'أتوبيس',
                         'TRAM': 'ترام',
                         'RAIL': 'قطار',
-                        'SUBWAY': 'مترو'
+                        'SUBWAY': 'مترو',
+                        'FERRY': 'عبّارة'
                     }.get(step['mode'], step['mode'])
-                    response += f"{i}. 🚌 اركب {mode_name} من **{step['from']}** إلى **{step['to']}** ({step['duration']} دق)\n"
+                    route_txt = f" - خط {step['route']}" if step.get('route') else ''
+                    headsign_txt = f" تجاه {step['headsign']}" if step.get('headsign') else ''
+                    response += f"{i}. 🚌 اركب {mode_name}{route_txt}{headsign_txt} من {step['from']} إلى {step['to']} ({step['duration']} د)\n"
             
             if route.transit_modes:
-                response += f"\n**وسائل النقل المستخدمة:** {', '.join(route.transit_modes)}"
+                response += f"\nوسائل النقل: {', '.join(route.transit_modes)}"
             
         else:
-            response = f"""
-🚌 **Trip Plan from {from_name} to {to_name}**
-
-⏱️ **Total Time:** {route.duration} minutes
-📏 **Total Distance:** {route.distance:.1f} km
-🚶 **Walking Time:** {route.total_walking_time} minutes
-
-**Trip Details:**
-"""
+            response = f"⏱️ Total: {route.duration} min\n📏 Distance: {route.distance:.1f} km\n🚶 Walking: {route.total_walking_time} min\n"
             
             for i, step in enumerate(route.steps, 1):
                 if step['mode'] == 'WALK':
-                    response += f"{i}. 🚶 Walk from **{step['from']}** to **{step['to']}** ({step['duration']} min - {step['distance']:.1f} km)\n"
+                    response += f"{i}. 🚶 Walk from {step['from']} to {step['to']} ({step['duration']} min - {step['distance']:.1f} km)\n"
                 else:
-                    response += f"{i}. 🚌 Take {step['mode']} from **{step['from']}** to **{step['to']}** ({step['duration']} min)\n"
+                    route_txt = f" {step['route']}" if step.get('route') else ''
+                    headsign_txt = f" toward {step['headsign']}" if step.get('headsign') else ''
+                    response += f"{i}. 🚌 Take {step['mode']}{route_txt}{headsign_txt} from {step['from']} to {step['to']} ({step['duration']} min)\n"
             
             if route.transit_modes:
-                response += f"\n**Transit Modes Used:** {', '.join(route.transit_modes)}"
+                response += f"\nTransit modes: {', '.join(route.transit_modes)}"
         
         return response
+
+    def format_routes_response(self, routes: List[Route], from_name: str, to_name: str, language: str) -> str:
+        """Format multiple itineraries with numbering and brief headers."""
+        if language == "ar":
+            header = f"🚌 خطة الرحلة من {from_name} إلى {to_name}\n\n"
+            out = header
+            for idx, r in enumerate(routes, 1):
+                out += f"الخيار {idx}:\n"
+                out += self._format_single_route(r, language)
+                out += "\n\n"
+            return out.strip()
+        else:
+            header = f"🚌 Trip plan from {from_name} to {to_name}\n\n"
+            out = header
+            for idx, r in enumerate(routes, 1):
+                out += f"Option {idx}:\n"
+                out += self._format_single_route(r, language)
+                out += "\n\n"
+            return out.strip()
     
     def create_basic_route(self, from_coords: Tuple[float, float, str], to_coords: Tuple[float, float, str], language: str) -> str:
         """Create a basic route when OTP is not available"""
@@ -348,6 +356,11 @@ class FinalTransitAgent:
             
             # Extract locations
             from_location, to_location = self.extract_locations(user_query)
+            if not from_location or not to_location:
+                # Use Gemini fallback NER
+                smart_from, smart_to = await self.extract_locations_smart(user_query)
+                from_location = from_location or smart_from
+                to_location = to_location or smart_to
             
             if not from_location or not to_location:
                 if language == "ar":
@@ -372,10 +385,10 @@ class FinalTransitAgent:
                     return f"Sorry, I couldn't find the location: **{to_location}**. Please check the spelling."
             
             # Try to plan route with OTP
-            route = await self.plan_route_with_otp((from_coords[0], from_coords[1]), (to_coords[0], to_coords[1]))
+            routes = await self.plan_route_with_otp((from_coords[0], from_coords[1]), (to_coords[0], to_coords[1]))
             
-            if route:
-                return self.format_route_response(route, from_coords[2], to_coords[2], language)
+            if routes and len(routes) > 0:
+                return self.format_routes_response(routes, from_coords[2], to_coords[2], language)
             else:
                 # Fallback to basic route info
                 return self.create_basic_route(from_coords, to_coords, language)
