@@ -251,24 +251,42 @@ class FinalTransitAgent:
         """Format a single itinerary into human readable text."""
         if language == "ar":
             response = f"⏱️ الوقت الكلي: {route.duration} دقيقة\n📏 المسافة: {route.distance:.1f} كم\n🚶 وقت المشي: {route.total_walking_time} دقيقة\n"
-            
+
+            def ar_mode(step: Dict[str, Any]) -> str:
+                mode = step.get('mode')
+                route_text = ' '.join([
+                    str(step.get('route') or ''),
+                    str(step.get('headsign') or ''),
+                ]).lower()
+                # Detect microbus from route naming (English/Arabic synonyms)
+                microbus_keywords = [
+                    'microbus', 'micro', 'minibus', 'mini bus',
+                    'ميكروباص', 'ميكرو', 'ميني', 'ميني باص', 'مشروع', 'تونيا', 'تونية', 'تونيات', 'توناية'
+                ]
+                if mode == 'BUS' and any(k in route_text for k in microbus_keywords):
+                    return 'ميكروباص'
+                return {
+                    'BUS': 'أتوبيس',
+                    'TRAM': 'ترام',
+                    'RAIL': 'قطار',
+                    'SUBWAY': 'مترو',
+                    'FERRY': 'عبّارة'
+                }.get(mode, mode or '')
+
             for i, step in enumerate(route.steps, 1):
                 if step['mode'] == 'WALK':
                     response += f"{i}. 🚶 امشي من {step['from']} إلى {step['to']} ({step['duration']} د - {step['distance']:.1f} كم)\n"
                 else:
-                    mode_name = {
-                        'BUS': 'أتوبيس',
-                        'TRAM': 'ترام',
-                        'RAIL': 'قطار',
-                        'SUBWAY': 'مترو',
-                        'FERRY': 'عبّارة'
-                    }.get(step['mode'], step['mode'])
-                    route_txt = f" - خط {step['route']}" if step.get('route') else ''
-                    headsign_txt = f" تجاه {step['headsign']}" if step.get('headsign') else ''
-                    response += f"{i}. 🚌 اركب {mode_name}{route_txt}{headsign_txt} من {step['from']} إلى {step['to']} ({step['duration']} د)\n"
-            
+                    mode_name = ar_mode(step)
+                    route_txt = f" خط {step['route']}" if step.get('route') else ''
+                    headsign_txt = f" اتجاه {step['headsign']}" if step.get('headsign') else ''
+                    response += (
+                        f"{i}. 🚌 اركب {mode_name}{route_txt}{headsign_txt} من {step['from']} إلى {step['to']} "
+                        f"(حوالي {step['duration']} دقيقة) ثم انزل عند {step['to']}\n"
+                    )
+
             if route.transit_modes:
-                response += f"\nوسائل النقل: {', '.join(route.transit_modes)}"
+                response += f"\nوسائل النقل المستخدمة: {', '.join(route.transit_modes)}"
             
         else:
             response = f"⏱️ Total: {route.duration} min\n📏 Distance: {route.distance:.1f} km\n🚶 Walking: {route.total_walking_time} min\n"
@@ -279,7 +297,7 @@ class FinalTransitAgent:
                 else:
                     route_txt = f" {step['route']}" if step.get('route') else ''
                     headsign_txt = f" toward {step['headsign']}" if step.get('headsign') else ''
-                    response += f"{i}. 🚌 Take {step['mode']}{route_txt}{headsign_txt} from {step['from']} to {step['to']} ({step['duration']} min)\n"
+                    response += f"{i}. 🚌 Take {step['mode']}{route_txt}{headsign_txt} from {step['from']} to {step['to']} (~{step['duration']} min), alight at {step['to']}\n"
             
             if route.transit_modes:
                 response += f"\nTransit modes: {', '.join(route.transit_modes)}"
@@ -292,7 +310,7 @@ class FinalTransitAgent:
             header = f"🚌 خطة الرحلة من {from_name} إلى {to_name}\n\n"
             out = header
             for idx, r in enumerate(routes, 1):
-                out += f"الخيار {idx}:\n"
+                out += f"الخيار {idx}: ⏱️ {r.duration} دقيقة • تحويلات: {max(0, len([s for s in r.steps if s['mode'] != 'WALK'])-1)}\n"
                 out += self._format_single_route(r, language)
                 out += "\n\n"
             return out.strip()
@@ -300,7 +318,7 @@ class FinalTransitAgent:
             header = f"🚌 Trip plan from {from_name} to {to_name}\n\n"
             out = header
             for idx, r in enumerate(routes, 1):
-                out += f"Option {idx}:\n"
+                out += f"Option {idx}: ⏱️ {r.duration} min • Transfers: {max(0, len([s for s in r.steps if s['mode'] != 'WALK'])-1)}\n"
                 out += self._format_single_route(r, language)
                 out += "\n\n"
             return out.strip()
