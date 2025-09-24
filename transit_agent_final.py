@@ -195,7 +195,7 @@ class FinalTransitAgent:
         """Check if OTP server is running"""
         return await self.otp_client.check_status()
     
-    async def plan_route_with_otp(self, from_coords: Tuple[float, float], to_coords: Tuple[float, float]) -> Optional[List[Route]]:
+    async def plan_route_with_otp(self, from_coords: Tuple[float, float], to_coords: Tuple[float, float]) -> Optional[Dict[str, Any]]:
         """Plan route using OpenTripPlanner returning multiple itineraries, with proper duration math (seconds→minutes)."""
         try:
             if not await self.check_otp_status():
@@ -208,11 +208,12 @@ class FinalTransitAgent:
             )
 
             if not result.get("success"):
-                print(f"OTP error: {result.get('error')}")
-                return None
+                print(f"OTP error: {result.get('error')} ({result.get('error_id')})")
+                return {"error": result.get("error"), "error_id": result.get("error_id")}
 
             itineraries: List[OTPItinerary] = result["itineraries"]
             routes: List[Route] = []
+            enriched: List[Dict[str, Any]] = []
             for itin in itineraries:
                 steps: List[Dict[str, Any]] = []
                 transit_modes: List[str] = []
@@ -241,8 +242,19 @@ class FinalTransitAgent:
                         transit_modes=list(dict.fromkeys(transit_modes))
                     )
                 )
+                enriched.append({
+                    'duration_min': itin.total_duration_min,
+                    'distance_km': itin.total_distance_km,
+                    'walking_time_min': itin.total_walking_time_min,
+                    'walking_distance_km': getattr(itin, 'walking_distance_km', None),
+                    'waiting_time_min': getattr(itin, 'waiting_time_min', None),
+                    'transfers': itin.transfers,
+                    'steps': steps
+                })
 
-            return routes
+            # Best route heuristic: fewest transfers then shortest duration
+            best = min(enriched, key=lambda r: (r['transfers'], r['duration_min'])) if enriched else None
+            return {"routes": routes, "raw": enriched, "best": best}
         except Exception as e:
             print(f"OTP Error: {e}")
             return None
@@ -304,23 +316,47 @@ class FinalTransitAgent:
         
         return response
 
-    def format_routes_response(self, routes: List[Route], from_name: str, to_name: str, language: str) -> str:
+    def format_routes_response(self, routes: List[Route], from_name: str, to_name: str, language: str, meta: Optional[Dict[str, Any]] = None) -> str:
         """Format multiple itineraries with numbering and brief headers."""
+        enriched = meta.get('raw') if meta else None
+        best = meta.get('best') if meta else None
         if language == "ar":
             header = f"🚌 خطة الرحلة من {from_name} إلى {to_name}\n\n"
             out = header
             for idx, r in enumerate(routes, 1):
-                out += f"الخيار {idx}: ⏱️ {r.duration} دقيقة • تحويلات: {max(0, len([s for s in r.steps if s['mode'] != 'WALK'])-1)}\n"
+                transfers = max(0, len([s for s in r.steps if s['mode'] != 'WALK'])-1)
+                extra = ''
+                if enriched:
+                    e = enriched[idx-1]
+                    wait = e.get('waiting_time_min')
+                    walkd = e.get('walking_distance_km')
+                    extra = f" • انتظار: {wait} د" if wait else ''
+                    extra += f" • مشي: {walkd:.2f} كم" if walkd else ''
+                star = '⭐' if best and enriched and enriched[idx-1] is best else ''
+                out += f"{star}الخيار {idx}: ⏱️ {r.duration} دقيقة • تحويلات: {transfers}{extra}\n"
                 out += self._format_single_route(r, language)
                 out += "\n\n"
+            if best:
+                out += "أفضل مسار مختار بناءً على أقل تحويلات ثم أقل زمن.\n"
             return out.strip()
         else:
             header = f"🚌 Trip plan from {from_name} to {to_name}\n\n"
             out = header
             for idx, r in enumerate(routes, 1):
-                out += f"Option {idx}: ⏱️ {r.duration} min • Transfers: {max(0, len([s for s in r.steps if s['mode'] != 'WALK'])-1)}\n"
+                transfers = max(0, len([s for s in r.steps if s['mode'] != 'WALK'])-1)
+                extra = ''
+                if enriched:
+                    e = enriched[idx-1]
+                    wait = e.get('waiting_time_min')
+                    walkd = e.get('walking_distance_km')
+                    extra = f" • Wait: {wait} min" if wait else ''
+                    extra += f" • Walk: {walkd:.2f} km" if walkd else ''
+                star = '⭐' if best and enriched and enriched[idx-1] is best else ''
+                out += f"{star}Option {idx}: ⏱️ {r.duration} min • Transfers: {transfers}{extra}\n"
                 out += self._format_single_route(r, language)
                 out += "\n\n"
+            if best:
+                out += "Best route chosen based on least transfers then shortest time.\n"
             return out.strip()
     
     def create_basic_route(self, from_coords: Tuple[float, float, str], to_coords: Tuple[float, float, str], language: str) -> str:
@@ -403,10 +439,25 @@ class FinalTransitAgent:
                     return f"Sorry, I couldn't find the location: **{to_location}**. Please check the spelling."
             
             # Try to plan route with OTP
-            routes = await self.plan_route_with_otp((from_coords[0], from_coords[1]), (to_coords[0], to_coords[1]))
+            route_result = await self.plan_route_with_otp((from_coords[0], from_coords[1]), (to_coords[0], to_coords[1]))
             
-            if routes and len(routes) > 0:
-                return self.format_routes_response(routes, from_coords[2], to_coords[2], language)
+            if route_result and isinstance(route_result, dict) and route_result.get('error'):
+                err_id = route_result.get('error_id')
+                if language == 'ar':
+                    if err_id == 'TOO_CLOSE':
+                        return 'النقطتان قريبتان جداً من بعض (TOO_CLOSE). جرب مسافة أبعد أو موقع مختلف.'
+                    if err_id == 'PATH_NOT_FOUND':
+                        return 'لم أجد مسار (PATH_NOT_FOUND). قد لا توجد خطوط تربط هذين الموقعين في البيانات الحالية.'
+                    return f"خطأ من OTP: {route_result.get('error')}"
+                else:
+                    if err_id == 'TOO_CLOSE':
+                        return 'The two points are too close (TOO_CLOSE). Try a farther destination.'
+                    if err_id == 'PATH_NOT_FOUND':
+                        return 'No path found (PATH_NOT_FOUND). Possibly no transit linkage between these points.'
+                    return f"OTP error: {route_result.get('error')}"
+
+            if route_result and route_result.get('routes'):
+                return self.format_routes_response(route_result['routes'], from_coords[2], to_coords[2], language, meta=route_result)
             else:
                 # Fallback to basic route info
                 return self.create_basic_route(from_coords, to_coords, language)

@@ -32,6 +32,8 @@ class OTPItinerary:
     total_duration_min: int
     total_distance_km: float
     total_walking_time_min: int
+    walking_distance_km: float
+    waiting_time_min: int
     transfers: int
     legs: List[OTPLeg]
 
@@ -104,8 +106,10 @@ class AsyncOTPClient:
                         return {"success": False, "error": f"OTP HTTP {status}", "raw": data}
 
                     if "error" in data:
-                        msg = data.get("error", {}).get("message") or str(data.get("error"))
-                        return {"success": False, "error": msg or "OTP returned error", "raw": data}
+                        err_obj = data.get("error", {}) or {}
+                        msg = err_obj.get("message") or err_obj.get("msg") or str(err_obj)
+                        err_id = err_obj.get("id") or err_obj.get("errorId")
+                        return {"success": False, "error": msg or "OTP returned error", "error_id": err_id, "raw": data}
 
                     plan = data.get("plan")
                     if not plan:
@@ -136,6 +140,9 @@ class AsyncOTPClient:
             walk_time_sec = sum((leg.get("duration", 0) or 0) for leg in legs if (leg.get("mode") == "WALK"))
         total_walking_time_min = int(round(walk_time_sec / 60))
 
+        walk_distance_km = (itinerary.get("walkDistance", 0) or 0) / 1000.0
+        waiting_time_min = int(round(((itinerary.get("waitingTime", 0) or 0) / 60)))
+
         transit_legs = [leg for leg in legs if (leg.get("transitLeg") or leg.get("mode") in {"BUS", "TRAM", "RAIL", "SUBWAY", "FERRY"})]
         transfers = max(0, len(transit_legs) - 1)
 
@@ -163,6 +170,8 @@ class AsyncOTPClient:
             total_duration_min=total_duration_min,
             total_distance_km=round(total_distance_km, 2),
             total_walking_time_min=total_walking_time_min,
+            walking_distance_km=round(walk_distance_km, 3),
+            waiting_time_min=waiting_time_min,
             transfers=transfers,
             legs=parsed_legs,
         )
